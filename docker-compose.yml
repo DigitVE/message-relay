@@ -1,0 +1,58 @@
+version: "3"
+
+networks:
+  default:
+    external:
+      name: webproxy
+
+services:
+  message-relay:
+    build: .
+    container_name: message-relay_1
+    depends_on:
+      - db_replication
+    restart: always
+
+  db_replication:
+    image: postgres
+    container_name: message-relay-postgres_1
+    ports:
+      - 54321:5432
+    environment:
+      - POSTGRES_DB=replication_test
+      - POSTGRES_USER=replication_test
+      - POSTGRES_PASSWORD=replication_test
+      - PGDATA=/var/lib/postgresql/data/garbage
+    command: postgres -c config_file=/var/lib/postgresql/data/conf/postgresql.conf
+    restart: always
+    volumes:
+      - ./postgresql.conf:/var/lib/postgresql/data/conf/postgresql.conf
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:5.3.4
+    container_name: message-relay-zookeeper_1
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - 22181:2181
+
+  kafka:
+    image: confluentinc/cp-kafka:5.3.4
+    container_name: message-relay-kafka_1
+    depends_on:
+      - zookeeper
+    ports:
+      - 29092:29092
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://message-relay-kafka_1:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    volumes:
+      - kafkaVolume:/var/lib/kafka/data
+
+volumes:
+  kafkaVolume:
