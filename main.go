@@ -16,7 +16,7 @@ import (
 
 func init() {
 	if err := godotenv.Load(); err != nil {
-		log.Print("No .env file found")
+		log.Fatalf("No .env file found")
 	}
 }
 
@@ -25,22 +25,21 @@ func main() {
 	outputPlugin, _ := os.LookupEnv("RELAY_OUTPUT_PLUGIN")
 	pgConnection, _ := os.LookupEnv("RELAY_PG_CONNECTION")
 	conn, err := pgconn.Connect(context.Background(), pgConnection)
-	if err != nil {
-		log.Fatalln("failed to connect to PostgreSQL server:", err)
-	}
+
+	printAndExit(err, "failed to connect to PostgreSQL server:")
+
 	defer conn.Close(context.Background())
 
 	result := conn.Exec(context.Background(), "DROP PUBLICATION IF EXISTS relay_pub;")
 	_, err = result.ReadAll()
-	if err != nil {
-		log.Fatalln("drop publication if exists error", err)
-	}
+
+	printAndExit(err, "drop publication if exists error:")
 
 	result = conn.Exec(context.Background(), fmt.Sprintf("CREATE PUBLICATION relay_pub FOR TABLE %s;", listenedTable))
 	_, err = result.ReadAll()
-	if err != nil {
-		log.Fatalln("create publication error", err)
-	}
+
+	printAndExit(err, "create publication error:")
+
 	log.Println("create publication relay_pub")
 
 	var pluginArguments []string
@@ -51,23 +50,23 @@ func main() {
 	}
 
 	sysident, err := pglogrepl.IdentifySystem(context.Background(), conn)
-	if err != nil {
-		log.Fatalln("IdentifySystem failed:", err)
-	}
+
+	printAndExit(err, "IdentifySystem failed:")
+
 	log.Println("SystemID:", sysident.SystemID, "Timeline:", sysident.Timeline, "XLogPos:", sysident.XLogPos, "DBName:", sysident.DBName)
 
 	slotName := "relay_slot"
 
 	_, err = pglogrepl.CreateReplicationSlot(context.Background(), conn, slotName, outputPlugin, pglogrepl.CreateReplicationSlotOptions{Temporary: true})
-	if err != nil {
-		log.Fatalln("CreateReplicationSlot failed:", err)
-	}
+
+	printAndExit(err, "CreateReplicationSlot failed:")
+
 	log.Println("Created temporary replication slot:", slotName)
 
 	err = pglogrepl.StartReplication(context.Background(), conn, slotName, sysident.XLogPos, pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments})
-	if err != nil {
-		log.Fatalln("StartReplication failed:", err)
-	}
+
+	printAndExit(err, "StartReplication failed:")
+
 	log.Println("Logical replication started on slot", slotName)
 
 	clientXLogPos := sysident.XLogPos
@@ -77,9 +76,8 @@ func main() {
 	for {
 		if time.Now().After(nextStandbyMessageDeadline) {
 			err = pglogrepl.SendStandbyStatusUpdate(context.Background(), conn, pglogrepl.StandbyStatusUpdate{WALWritePosition: clientXLogPos})
-			if err != nil {
-				log.Fatalln("SendStandbyStatusUpdate failed:", err)
-			}
+
+			printAndExit(err, "SendStandbyStatusUpdate failed:")
 
 			nextStandbyMessageDeadline = time.Now().Add(standbyMessageTimeout)
 		}
@@ -99,15 +97,15 @@ func main() {
 			switch msg.Data[0] {
 			case pglogrepl.XLogDataByteID:
 				xld, err := pglogrepl.ParseXLogData(msg.Data[1:])
-				if err != nil {
-					log.Fatalln("ParseXLogData failed:", err)
-				}
+
+				printAndExit(err, "ParseXLogData failed:")
+
 				if xld.WALData[0] == 'I' {
 					log.Println("XLogData =>", "WALStart", xld.WALStart, "ServerWALEnd", xld.ServerWALEnd, "ServerTime:", xld.ServerTime, "WALData", string(xld.WALData))
 					logicalMsg, err := pglogrepl.Parse(xld.WALData)
-					if err != nil {
-						log.Fatalf("Parse logical replication message: %s", err)
-					}
+
+					printAndExit(err, "Parse logical replication message:")
+
 					relationID := int32(xld.WALData[1])
 					log.Printf("Receive a logical replication message: %s %d", logicalMsg.Type(), relationID)
 
@@ -121,6 +119,12 @@ func main() {
 		default:
 			log.Printf("Received unexpected message: %#v\n", msg)
 		}
+	}
+}
+
+func printAndExit(err error, msg string) {
+	if err != nil {
+		log.Fatalf("%s: %s", msg, err)
 	}
 }
 
